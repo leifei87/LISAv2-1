@@ -199,6 +199,173 @@ Info: Number # $index URL is $vhdurl
 	}
 }
 
+Function Detect-NewKernelPackageFromStorageContainer {
+	param(
+		[string]$Containers= "",
+		[string]$DetectInterval= ""
+	)
+
+	$containers_result = $Containers.Split(";")
+
+	$xmlFile = "kernelBlobsXml.xml"
+	$configFile = "extraConfig.xml"
+	$newKernelsFile = "NewKernels.xml"
+	$vhdCount = 0
+	$lastCheckTime = [DateTime]::Now.AddHours(-$DetectInterval)
+
+	if (Test-Path $newKernelsFile) {
+		Remove-Item $newKernelsFile
+	}
+
+	if (Test-Path $xmlFile) {
+		Remove-Item $xmlFile
+	}
+
+	if (Test-Path $configFile) {
+		Remove-Item $configFile
+	}
+
+	$KernelInfoXml = New-Object -TypeName xml
+	$root = $KernelInfoXml.CreateElement("KernelInfo")
+	$KernelInfoXml.AppendChild($root) | Out-Null
+	foreach ($container in $containers_result) {
+		($DistroCategory, $Url, $TestCategory) = $container.Split(',')
+		if (-not $DistroCategory -or -not $Url) {
+			continue
+		}
+		$DistroCategory = $DistroCategory.Trim()
+		$Url = $Url.Trim()
+		$listBlobUrl = $Url + "&restype=container&comp=list"
+		if (Test-Path $xmlFile) {
+			Remove-Item $xmlFile
+		}
+
+		$configFileUrl = $Url.Insert($Url.IndexOf('?'), "/config.xml")
+		$mailReceviers = ""
+		try {
+			Invoke-RestMethod $configFileUrl -Method Get -ErrorVariable restError -OutFile $configFile
+
+			if ($?) {
+				$configXml = [xml](Get-Content $configFile)
+				if ($configXml.MailReceivers) {
+					$mailReceviers = $configXml.MailReceivers
+				}
+				if ($configXml.Config) {
+					if ($configXml.Config.ImageMatch) {
+						$imageMatchRegex = $configXml.Config.ImageMatch
+					}
+					if ($configXml.Config.MailReceivers) {
+						$mailReceviers = $configXml.Config.MailReceivers
+					}
+					if ($configXml.Config.LogContainer -and $configXml.Config.LogContainer.SASL_URL) {
+						$logContainerSAS = $configXml.Config.LogContainer.SASL_URL
+					}
+				}
+			}
+		} catch {
+			Write-Host "No config file"
+		}
+
+		# Get the blob metadata
+		Invoke-RestMethod $listBlobUrl -Headers @{"Accept"="Application/xml"} -ErrorVariable restError -OutFile $xmlFile
+
+		if ($?) {
+			$blobsXml = [xml](Get-Content $xmlFile)
+			$vhdUrls = @()
+			foreach ($blob in $blobsXml.EnumerationResults.Blobs.Blob) {
+				$timeStamp = [DateTime]::Parse($blob.Properties.'Last-Modified')
+				$etag = $blob.Properties.Etag
+
+				if (($timeStamp -gt $lastCheckTime) -and $blob.Name.EndsWith(".rpm")) {
+					$srcUrl = $Url.Insert($Url.IndexOf('?'), '/' + $blob.Name)
+
+					# Try get metadata the second time to check whether the Blob is in the progress of uploading. Etag value changes if the vhd is being uploaded.
+					Start-Sleep -s 5
+					Invoke-RestMethod $listBlobUrl -Headers @{"Accept"="Application/xml"} -ErrorVariable restError -OutFile $xmlFile
+
+					if ($?) {
+						$blobsXml2 = [xml](Get-Content $xmlFile)
+						$isUploading = $false
+						foreach ($b in $blobsXml2.EnumerationResults.Blobs.Blob) {
+							if ($b.Name -eq $blob.Name) {
+								if ($b.Properties.Etag -ne $etag) {
+									$isUploading = $true
+									break
+								}
+							}
+						}
+						if ($isUploading) {
+							continue
+						}
+					} else {
+						Write-Host "Error: Get blob data of distro category $DistroCategory failed($($restError[0].Message))."
+						continue
+					}
+
+					# for distros that specifies images match conditions
+					if($imageMatchRegex) {
+						# image name match with regex defined
+						if($blob.Name -match $imageMatchRegex) {
+							$vhdUrls += $srcUrl
+						}
+					} else {
+						$vhdUrls += $srcUrl
+					}
+				}
+			}
+			if ($vhdUrls.Count -gt 0) {
+				$vhdCount += $vhdUrls.Count
+				Write-Host "Info: $vhdCount new Kernel Package(s) found in distro category $DistroCategory in past $DetectInterval hours."
+				$index = 1
+				foreach ($vhdurl in $vhdUrls) {
+				$output = @"
+
+Info: Number # $index URL is $vhdurl
+"@
+					Write-Host $output
+					$index++
+				}
+				$VhdNode = $KernelInfoXml.CreateElement("Kernel")
+				$root.AppendChild($VhdNode) | Out-Null
+				$DistroCategoryNode = $KernelInfoXml.CreateElement("DistroCategory")
+				$DistroCategoryNode.set_InnerXml($DistroCategory) | Out-Null
+				$VhdNode.AppendChild($DistroCategoryNode) | Out-Null
+				if ( $mailReceviers ) {
+					$MailReceiversNode = $KernelInfoXml.CreateElement("MailReceivers")
+					$MailReceiversNode.set_InnerXml($mailReceviers)
+					$VhdNode.AppendChild($MailReceiversNode) | Out-Null
+				}
+
+				$UrlsNode = $KernelInfoXml.CreateElement("Urls")
+				$VhdNode.AppendChild($UrlsNode) | Out-Null
+				foreach ($vhdurl in $vhdUrls) {
+					$UrlNode = $KernelInfoXml.CreateElement("Url")
+					$UrlNode.set_InnerXml($vhdUrl.Replace('&','&amp;'))
+					$UrlsNode.AppendChild($UrlNode) | Out-Null					
+				}
+
+				$TestCategoryNode = $KernelInfoXml.CreateElement("TestCategory")
+				$TestCategoryNode.set_InnerXml($TestCategory)
+				$VhdNode.AppendChild($TestCategoryNode) | Out-Null
+
+				if($logContainerSAS) {
+					$LogContainerSASUrlNode = $KernelInfoXml.CreateElement("LogContainerSASUrl")
+					$LogContainerSASUrlNode.set_InnerXml($logContainerSAS.Replace('&','&amp;'))
+					$VhdNode.AppendChild($LogContainerSASUrlNode) | Out-Null
+				}
+			} else {
+				Write-Host "Info: No new kernel package found of distro category $DistroCategory in past $DetectInterval hours."
+			}
+		} else {
+			Write-Host "Error: Get blob data failed($($restError[0].Message)) for distro category $DistroCategory."
+		}
+	}
+
+	if ($vhdCount -gt 0) {
+		$KernelInfoXml.Save("$newKernelsFile")
+	}
+}
+
 Function Validate-VHD {
 	param(
 		[string]$url= ""
