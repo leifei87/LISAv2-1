@@ -103,7 +103,7 @@ Function Detect-NewVHDFromStorageContainer {
 			$blobsXml = [xml](Get-Content $xmlFile)
 			$vhdUrls = @()
 			foreach ($blob in $blobsXml.EnumerationResults.Blobs.Blob) {
-				$timeStamp = [DateTime]::Parse($blob.Properties.'Last-Modified')
+				$timeStamp = [DateTime]::Parse($blob.Properties.'Creation-Time')
 				$etag = $blob.Properties.Etag
 
 				if (($timeStamp -gt $lastCheckTime) -and (($blob.Properties.BlobType.ToLower() -eq "pageblob") `
@@ -112,25 +112,29 @@ Function Detect-NewVHDFromStorageContainer {
 
 					# Try get metadata the second time to check whether the VHD is in the progress of uploading. Etag value changes if the vhd is being uploaded.
 					Start-Sleep -s 5
-					Invoke-RestMethod $listBlobUrl -Headers @{"Accept"="Application/xml"} -ErrorVariable restError -OutFile $xmlFile
+					$isUploading = $true
+					while( $isUploading ){
+						Invoke-RestMethod $listBlobUrl -Headers @{"Accept"="Application/xml"} -ErrorVariable restError -OutFile $xmlFile
 
-					if ($?) {
-						$blobsXml2 = [xml](Get-Content $xmlFile)
-						$isUploading = $false
-						foreach ($b in $blobsXml2.EnumerationResults.Blobs.Blob) {
-							if ($b.Name -eq $blob.Name) {
-								if ($b.Properties.Etag -ne $etag) {
-									$isUploading = $true
+						if ($?) {
+							$blobsXml2 = [xml](Get-Content $xmlFile)
+							foreach ($b in $blobsXml2.EnumerationResults.Blobs.Blob) {
+								if ($b.Name -eq $blob.Name) {
+									if ($b.Properties.Etag -ne $etag) {
+										$etag = $b.Properties.Etag
+										Write-host "Info: The source is uploading, wait for the completion..."
+										Start-Sleep -Seconds 10
+										break
+									} else {
+										$isUploading = $false
+									}
 									break
 								}
 							}
+						} else {
+							Write-Host "Error: Get blob data of distro category $DistroCategory failed($($restError[0].Message))."
+
 						}
-						if ($isUploading) {
-							continue
-						}
-					} else {
-						Write-Host "Error: Get blob data of distro category $DistroCategory failed($($restError[0].Message))."
-						continue
 					}
 
 					# for distros that specifies images match conditions
@@ -273,7 +277,7 @@ Function Detect-NewKernelPackageFromStorageContainer {
 			$blobsXml = [xml](Get-Content $xmlFile)
 			$vhdUrls = @()
 			foreach ($blob in $blobsXml.EnumerationResults.Blobs.Blob) {
-				$timeStamp = [DateTime]::Parse($blob.Properties.'Last-Modified')
+				$timeStamp = [DateTime]::Parse($blob.Properties.'Creation-Time')
 				$etag = $blob.Properties.Etag
 
 				if (($timeStamp -gt $lastCheckTime) -and $blob.Name.EndsWith(".rpm")) {
@@ -281,25 +285,29 @@ Function Detect-NewKernelPackageFromStorageContainer {
 
 					# Try get metadata the second time to check whether the Blob is in the progress of uploading. Etag value changes if the vhd is being uploaded.
 					Start-Sleep -s 5
-					Invoke-RestMethod $listBlobUrl -Headers @{"Accept"="Application/xml"} -ErrorVariable restError -OutFile $xmlFile
+					$isUploading = $true
+					while( $isUploading ){
+						Invoke-RestMethod $listBlobUrl -Headers @{"Accept"="Application/xml"} -ErrorVariable restError -OutFile $xmlFile
 
-					if ($?) {
-						$blobsXml2 = [xml](Get-Content $xmlFile)
-						$isUploading = $false
-						foreach ($b in $blobsXml2.EnumerationResults.Blobs.Blob) {
-							if ($b.Name -eq $blob.Name) {
-								if ($b.Properties.Etag -ne $etag) {
-									$isUploading = $true
+						if ($?) {
+							$blobsXml2 = [xml](Get-Content $xmlFile)
+							foreach ($b in $blobsXml2.EnumerationResults.Blobs.Blob) {
+								if ($b.Name -eq $blob.Name) {
+									if ($b.Properties.Etag -ne $etag) {
+										$etag = $b.Properties.Etag
+										Write-host "Info: The source is uploading, wait for the completion..."
+										Start-Sleep -Seconds 10
+										break
+									} else {
+										$isUploading = $false
+									}
 									break
 								}
 							}
+						} else {
+							Write-Host "Error: Get blob data of distro category $DistroCategory failed($($restError[0].Message))."
+
 						}
-						if ($isUploading) {
-							continue
-						}
-					} else {
-						Write-Host "Error: Get blob data of distro category $DistroCategory failed($($restError[0].Message))."
-						continue
 					}
 
 					# for distros that specifies images match conditions
@@ -374,7 +382,20 @@ Function Validate-VHD {
 	Write-Host "Info: Start to validate VHD $url."
 	$azcopy_Path="C:\Program Files (x86)\Microsoft SDKs\Azure\AzCopy\AzCopy.exe"
 	if( [System.IO.File]::Exists($azcopy_Path) ) {
-		& $azcopy_Path /Source:$url /Dest:$pwd/$vhdName /V /NC:30 /Y
+		Write-Host "Info: Start to download VHD."        
+		For ($count=1; $count -le 3; $count++){
+			Write-Host "Attempt: [$count/3]"
+			& $azcopy_Path /Source:$url /Dest:$pwd/$vhdName /V /NC:16 /Y
+			if($?){
+				Write-Host "Info: Finish to download VHD."
+				break;
+			}
+		}
+		if($count -gt 3)
+		{
+			Write-Host "Error: Failed to download vhd."
+			return $false			
+		}
 	} else {
 		Write-Host "Error: Please install tool AzCopy."
 		return $false
