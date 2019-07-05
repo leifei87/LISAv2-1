@@ -21,13 +21,13 @@ function Main {
             foreach ($vmData in $allVMData) {
                 if ($vmData.RoleName -imatch "dependency") {
                     $dependencyVmData = $vmData
-                    $dependencyVmNICs = ((Get-AzureRmVM -Name $dependencyVmData.RoleName `
+                    $dependencyVmNICs = ((Get-AzVM -Name $dependencyVmData.RoleName `
                         -ResourceGroupName $dependencyVmData.ResourceGroupName).NetworkProfile).NetworkInterfaces
                     $dependencyVmExtraNICs = $dependencyVmNICs | Where-Object {$_.Primary -eq $False}
 
                 } else {
                     $testVmData = $vmData
-                    $testVmNICs = ((Get-AzureRmVM -Name  $testVmData.RoleName `
+                    $testVmNICs = ((Get-AzVM -Name  $testVmData.RoleName `
                         -ResourceGroupName $testVmData.ResourceGroupName).NetworkProfile).NetworkInterfaces
                     $testVmExtraNICs = $testVmNICs | Where-Object {$_.Primary -eq $False}
                 }
@@ -55,11 +55,11 @@ function Main {
                 }
                 $testVMNicName = $($testVmExtraNICs[$index].Id).substring($($testVmExtraNICs[$index].Id).LastIndexOf("/")+1)
                 $dependencyVMNicName = $($dependencyVmExtraNICs[$index].Id).substring($($dependencyVmExtraNICs[$index].Id).LastIndexOf("/")+1)
-                $testIPaddr = (Get-AzureRmNetworkInterface -Name $testVMNicName -ResourceGroupName `
-                    $testVmData.ResourceGroupName | Get-AzureRmNetworkInterfaceIpConfig `
+                $testIPaddr = (Get-AzNetworkInterface -Name $testVMNicName -ResourceGroupName `
+                    $testVmData.ResourceGroupName | Get-AzNetworkInterfaceIpConfig `
                     | Select-Object PrivateIpAddress).PrivateIpAddress
-                $dependencyIPaddr = (Get-AzureRmNetworkInterface -Name $dependencyVMNicName -ResourceGroupName `
-                    $dependencyVmData.ResourceGroupName | Get-AzureRmNetworkInterfaceIpConfig `
+                $dependencyIPaddr = (Get-AzNetworkInterface -Name $dependencyVMNicName -ResourceGroupName `
+                    $dependencyVmData.ResourceGroupName | Get-AzNetworkInterfaceIpConfig `
                     | Select-Object PrivateIpAddress).PrivateIpAddress
 
                 Write-LogInfo "Will add VF_IP${ipIndex}=${testIPaddr} to constants"
@@ -111,7 +111,7 @@ function Main {
             # Install dependencies on both VMs
             if ($TestParams.Install_Dependencies -eq "yes") {
                 Run-LinuxCmd -username $VMUsername -password $password -ip $publicIp -port $vmPort `
-                    -command "cp /home/$VMUsername/sriov_constants.sh . ; . SR-IOV-Utils.sh; InstallDependencies" -RunAsSudo | Out-Null
+                    -command "cp /home/$VMUsername/sriov_constants.sh . ; . SR-IOV-Utils.sh; InstallDependencies" -RunAsSudo -runMaxAllowedTime 600 | Out-Null
                 if (-not $?) {
                     Write-LogErr "Failed to install dependencies on $($testVmData.RoleName)"
                     return $False
@@ -123,7 +123,7 @@ function Main {
                     return $False
                 }
                 Run-LinuxCmd -username $VMUsername -password $password -ip $publicIp -port $dependencyVmData.SSHPort `
-                    -command "cp /home/$VMUsername/sriov_constants.sh . ; . SR-IOV-Utils.sh; InstallDependencies" -RunAsSudo | Out-Null
+                    -command "cp /home/$VMUsername/sriov_constants.sh . ; . SR-IOV-Utils.sh; InstallDependencies" -RunAsSudo -runMaxAllowedTime 600 | Out-Null
                 if (-not $?) {
                     Write-LogErr "Failed to install dependencies on $($dependencyVmData.RoleName)"
                     return $False
