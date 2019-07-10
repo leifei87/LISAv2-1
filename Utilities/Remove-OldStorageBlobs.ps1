@@ -81,7 +81,7 @@ foreach ( $storageAccount in $allCleanupStorageAccounts ) {
 if ( $counter -gt 0 )
 {
 	Write-Host "All the cleanup blobs: "
-	Out-Host -InputObject $cleanupBlobs
+	$cleanupBlobs | Out-String -Width 4096
 }
 else
 {
