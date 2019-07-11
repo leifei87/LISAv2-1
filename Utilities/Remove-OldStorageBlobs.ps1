@@ -97,7 +97,7 @@ if ( $counter -gt 0 ){
 	else{
 		Write-Host "INFO: Totally $counter blobs need to be deleted, please browse file `'$cleanUpBlobsFileName`' for details"
 	}
-	$cleanupBlobs | Out-String -Width 4096 | Out-File $cleanUpBlobsFileName
+	Out-String -InputObject $cleanupBlobs -Width 4096 | Out-File $cleanUpBlobsFileName
 }
 else{
 	Write-Host "INFO: Not found matching blobs"
